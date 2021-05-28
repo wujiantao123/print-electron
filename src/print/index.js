@@ -1,42 +1,71 @@
-import axios from "axios";
+import axios from "../chinese/service/axios";
 import FormData from "form-data";
-axios.defaults.baseURL = "https://user.api.it120.cc";
-axios.defaults.headers["X-Token"] = "dd299bd6-97f8-4bb4-84c2-aa5e3b2ec8c1";
-
-axios.interceptors.response.use(
-  function(response) {
-    // Any status code that lie within the range of 2xx cause this function to trigger
-    // Do something with response data
-    return response.data;
-  },
-  function(error) {
-    // Any status codes that falls outside the range of 2xx cause this function to trigger
-    // Do something with response error
-    return Promise.reject(error);
-  }
-);
+import print from "../chinese/chinese/printer-example.js";
+import xp from "../chinese/chinese/xpsdk-demo.js";
 /**
  * 查询待发货订单
  */
-const getOrders = async () => {
+const getOrders = async (_token) => {
+  if (_token) axios.defaults.headers["X-Token"] = _token;
   // 这里查待发货的订单
   const params = new FormData();
   params.append("page", 1);
   params.append("pageSize", 10);
   params.append("statusTab", 1);
   params.append("status", 1);
-  const response = await axios.post("/user/apiExtOrder/list", params, {
-    headers: params.getHeaders(),
-  });
-  console.log(response);
-  if (response.code === 0) {
-    console.log("查到的订单数：", response.data.result.length);
-    response.data.result.forEach((item) => setOrderStatus(item));
-    // 定时获取最新订单
+  try {
+    const response = await axios.post("/user/apiExtOrder/list", params, {
+      headers: params.getHeaders(),
+    });
+    console.log(response)
+    if (response.code === 0) {
+      console.log("查到的订单数：", response.data.result.length);
+      response.data.result.forEach(async (item) => {
+        const logisticsMap = response.data.logisticsMap[item.id];
+        // 获取订单详情
+        const response2 = await axios.get(
+          "/user/apiExtOrder/detail?id=" + item.id
+        );
+        // 调用打印机
+        const result = await print.printFontAlign({
+          title: item.shopName,
+          delivery: item.isNeedLogistics ? "商家配送" : "到店自取",
+          remark: item.remark,
+          dateAdd: item.dateAdd,
+          orderNumber: item.orderNumber,
+          address: logisticsMap
+            ? `${logisticsMap.linkMan},${
+                logisticsMap.mobile
+              },${logisticsMap.provinceStr +
+                logisticsMap.cityStr +
+                logisticsMap.areaStr +
+                logisticsMap.address}`
+            : '联系人：'+response2.data.extJson['联系人']+',联系电话：'+response2.data.extJson['联系电话'],
+          goodsList: response2.data.goodsList,
+          sumAamountReal: response.data.aggregate.sum_amount_real,
+          amountLogistics: item.amountLogistics,
+        });
+        console.log("result", result);
+        if (result.code === 0) {
+          setTimeout(async ()=>{
+            const result2 = await xp.xpYunQueryOrderStateTest(result.data);
+            if(result2){
+              setOrderStatus(item);
+            }
+            console.log('打印结果',result2)
+          },3000)
+        }
+      });
+      // 定时获取最新订单
+      timeoutOrders();
+    } else {
+      timeoutOrders();
+    }
+  } catch (error) {
     timeoutOrders();
-  } else {
-    timeoutOrders();
+    console.log(error)
   }
+  
 };
 
 /**
@@ -66,4 +95,13 @@ const timeoutOrders = (time = 10000) => {
     getOrders();
   }, time);
 };
-export default getOrders;
+
+/**
+ * 检查打印机状态
+ */
+const checkXp = async (win) => {
+  const response = await xp.xpYunQueryPrinterStatusTest();
+  console.log(response);
+  if (win) win.webContents.send("on_result", response.data);
+};
+export { checkXp, getOrders };
